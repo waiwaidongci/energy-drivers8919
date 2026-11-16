@@ -19,24 +19,36 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 | 邮箱 | 角色 | 页面与动作 |
 |---|---|---|
-| admin@lishan.demo | admin / 工程负责人 | 六页；导入、研究、假设、审阅批准、下载 |
-| analyst@lishan.demo | analyst / 能耗分析员 | 六页；导入、研究、假设、下载；不能批准 |
-| viewer@lishan.demo | viewer / 楼宇联络员 | 六页只读，可下载已审阅假设；不能写入和批准 |
+| admin@lishan.demo | admin / 工程负责人 | 七页；导入、预报与归属维护、研究、假设、审阅批准、下载 |
+| analyst@lishan.demo | analyst / 能耗分析员 | 七页；导入、预报与归属维护、研究、假设、下载；不能批准 |
+| viewer@lishan.demo | viewer / 楼宇联络员 | 七页只读，可下载已审阅假设；不能导入预报、维护归属、写入和批准 |
 
 JWT有效8小时，带盐PBKDF2-SHA256密码；独立审计/错误中间件，登录每来源每分钟30次。对外部署前替换演示凭证与JWT密钥。
 
 ## 一天的工作
 
-1. 09:00 周山登录，核对`ls-energy-days.csv`的12栋×90日=1080行。
+1. 09:00 周山登录，核对`ls-energy-days.csv`的12栋×90日=1080行，并在预报资料库确认1080个楼宇日已选到预报、0缺报。
 2. 09:05 查看训练/封存分组；LS-03、LS-09、LS-12为封存楼宇，其能耗目标在首次评估公开前隐藏。
 3. 09:10 选择7个特征，α=[.05,.5,5,25]、l1_ratio=[.2,.6,.9]、20次置换，提交首次研究。
 4. 09:12 系统锁定数据集方案，worker在9栋训练楼宇内作3折GroupKFold比较，每折单独学习StandardScaler。
 5. 09:15 用胜出配置重拟合全部810个训练楼宇日，再读取270个封存楼宇日最终成绩。
-6. 09:20 核对三栋封存楼宇散点、原单位/标准化系数、每项特征置换ΔMAE及20次分布。
+6. 09:20 核对三栋封存楼宇散点、原单位/标准化系数、每项特征置换ΔMAE及20次分布，并读取“本研究冻结的天气预报”与缺报清单。
 7. 09:30 选“运行时长”等线索，提出运行排程和计量边界复核假设，写明两周独立观察计划。
 8. 10:00 季砾用admin审阅，林岑用viewer下载带完整输入与训练选择双指纹的研究CSV。
 
 初始seed只建立原始数据和三账号，第一份模型与解释来自真实提交。完成一次研究后，后续同配置复算会得到相同结果。
+
+## 天气预报资料库
+
+实测气温是事后回填，会让“提前预测”的成绩虚高。因此模型不再使用`building_days.temperature_c`（实测，仅作页面事后对照），温度特征改由预报资料库逐楼逐日解析：
+
+- **逐期站归属**：`building_station_assignments`按楼宇记录气象站区间（闭区间，可留空为未定）；同一楼宇区间不得重叠，换站必须收束旧区间或新开区间。
+- **选取规则**：对每个楼宇日D，截止时间为D前一日00:00；在当日归属站下，取`published_at`严格早于截止时间、且未撤回的期次中`published_at`最新者（同时间取更大revision）。改版是新期次；撤回单独留痕；迟到资料保留发布者原始发布时间，`received_at`只用于审计。
+- **缺报单列**：没有任何合规期次时记为`missing`（原因：无归属站 / 截止前无预报 / 截止前均撤回），`temperature_c`为空，绝不借用实测值。缺报楼宇日不进入含温度特征的研究；提交时会明确提示先补齐。
+- **只重算受影响楼宇日**：导入只按文件内出现的站点-日期区间回查；撤回只回查该站点-日期；改归属只回查该楼宇在受影响日期区间内已有选取。百万条预报的导入按批插入，不整库扫描，也不重算无关楼宇日。
+- **版本与研究隔离**：`weather_library_state`单行记录预报版本与归属版本，导入、撤回、归属变更、研究接受都会先锁该行。研究接受时把逐行拷贝写入`forecast_run_snapshots`/`forecast_snapshot_days`并冻结两版本号与快照SHA256；worker只读快照，所以并发补报、撤回或改归属不会影响已接受研究，中断恢复也只续跑同一快照。旧研究的结果、指纹与封存隔离不变。
+
+页面“预报资料库”提供四个页签：逐日选取与追溯（含选中期次、候选期次、截止时间、撤回记录、实测对照）、预报期次与撤回、站归属维护、导入与站点登记。驱动解释页展示该研究冻结的预报行与缺报行。
 
 ## 分组、封存与配置锁
 
@@ -50,7 +62,7 @@ JWT有效8小时，带盐PBKDF2-SHA256密码；独立审计/错误中间件，�
 
 ## ElasticNet与解释口径
 
-特征为室外温度°C、运行时长h、建筑面积m²、日到访人次、相对湿度%、设备装机kW、休息日0/1；目标为日能耗kWh。
+特征为室外温度°C（取自预报资料库，不用实测）、运行时长h、建筑面积m²、日到访人次、相对湿度%、设备装机kW、休息日0/1；目标为日能耗kWh。
 
 ElasticNet在标准化X上最小化`||y−Xw||²/(2n) + α*l1_ratio*||w||₁ + α*(1−l1_ratio)*||w||²/2`，目标y保留原kWh单位。候选按三折平均MAE选优，同分按更小α、更小l1_ratio；未收敛候选保留记录，不参与选优。最终模型只在全部训练行上拟合，原单位系数`w/scale`，原单位截距`intercept−Σ(coef*mean)`；另展示每训练SD系数，避免直接比较不同原量纲系数。
 
@@ -64,11 +76,11 @@ ElasticNet在标准化X上最小化`||y−Xw||²/(2n) + α*l1_ratio*||w||₁ + �
 
 常量训练特征、常量训练目标、楼宇不足、每楼天数不足、非有限训练/封存值、非法特征/候选、模型未收敛、数据重复均明确拒绝或保存failed原因。常量特征在首次锁定前校验，失败不会消耗方案锁。
 
-保存三类核验材料：train/test楼宇与行ID、每折训练/验证楼宇与行ID、每折及最终scaler均值/尺度。训练选择SHA256只包含训练观测、拆组与配置；完整输入SHA256另包含所有源数据和封存目标。固定cyclic求解、seed97与稳定排序便于复算。数值测量与DriverFinding标量使用MySQL DOUBLE，重复分布为JSON双精度，保留一致的持久化精度。
+保存三类核验材料：train/test楼宇与行ID、每折训练/验证楼宇与行ID、每折及最终scaler均值/尺度。训练选择SHA256只包含训练观测、拆组、配置与各训练行所用预报期次；完整输入SHA256另包含所有源数据、封存目标与冻结的预报/归属版本。固定cyclic求解、seed97与稳定排序便于复算。数值测量与DriverFinding标量使用MySQL DOUBLE，重复分布为JSON双精度，保留一致的持久化精度。
 
 ## 六页、五实体和共享代码
 
-六页：研究首页、楼宇与样本、分组模型比较、驱动解释、改造假设、研究留痕。
+七页：研究首页、楼宇与样本、分组模型比较、驱动解释、改造假设、预报资料库、研究留痕。
 
 BuildingDataset、BuildingDay、ModelRun、DriverFinding、RetrofitHypothesis五实体各贯穿model/schema/service/controller/route/前端API/Pinia store/页面。DriverFinding由真实计算持久化，通过独立API读取；假设引用具体finding，再由负责人批准交付。
 
@@ -82,7 +94,7 @@ BuildingDataset、BuildingDay、ModelRun、DriverFinding、RetrofitHypothesis五
 | 后端 | Python3.11、FastAPI、SQLAlchemy、PyMySQL、PyJWT |
 | 科学计算 | NumPy、scikit-learn1.5.2 Pipeline/StandardScaler/ElasticNet/GroupKFold |
 | worker | 单Python消费者；MySQL任务状态为事实源，Redis唤醒；恢复queued/running |
-| 数据服务 | MySQL8.0、Redis7 AOF |
+| 数据服务 | MySQL8.0、Redis7 AOF；预报资料库与冻结快照同库 |
 
 五服务恰好frontend/backend/worker/db/redis，每个healthcheck真实检测。backend等db/redis；worker再等backend；frontend等backend。命名卷为数据库、Redis、后端/worker共享产物；当前结果在DB，交付CSV实时生成，共享卷预留扩展。`backend/migrations/README.md`说明metadata初始化v1与自然键，没有生产schema升级工具。
 
@@ -96,6 +108,6 @@ BuildingDataset、BuildingDay、ModelRun、DriverFinding、RetrofitHypothesis五
 | JWT_SECRET | 独立项目签名密钥 |
 | SEED_DEMO | true启动seed，失败记日志并允许API启动 |
 
-seed以邮箱、数据集名、楼宇日自然键幂等，不覆盖已有数据集说明、配置锁或用户研究。固定seed97生成1080行，首个真实研究之后产生模型、七项解释与后续假设。
+seed以邮箱、数据集名、楼宇日自然键幂等，不覆盖已有数据集说明、配置锁或用户研究。固定seed97生成1080行，并建立3个气象站、每站每日两期预报与12栋楼逐期归属，再为全部楼宇日解析选取；首个真实研究之后产生模型、七项解释与后续假设。
 
 本地开发：db/redis启动后，在backend安装requirements并设置DATABASE_URL/REDIS_URL/JWT_SECRET，运行`uvicorn src.main:app --reload`与`python -m src.worker`；前端`npm ci && npm run dev`。Vite默认/api代理19217，本地API若用8000需同步代理目标。测试/截图/TESTING在批次根`test-artifacts/gb-0013/`。MIT License，见LICENSE。

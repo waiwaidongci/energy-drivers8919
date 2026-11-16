@@ -14,5 +14,5 @@ def inspect_holdout(model,report,rows,config):
         low,high=np.quantile(deltas,[.025,.975]).tolist()
         findings.append({'feature':feature,'coefficient':report['coefficient'][feature],'standardized_coefficient':report['standardized_coefficient'][feature],'importance_mean':float(np.mean(deltas)),'importance_low':low,'importance_high':high,'repeats':deltas})
     metrics={'mae':baseline,'rmse':float(np.sqrt(mean_squared_error(y,prediction))),'r2':None if np.std(y)<1e-10 else float(r2_score(y,prediction)),'n':len(test),'buildings':report['split']['test_buildings']}
-    points=[{'id':r['id'],'building_code':r['building_code'],'day':r['day'],'actual':float(actual),'prediction':float(pred),'residual':float(actual-pred)} for r,actual,pred in zip(test,y,prediction)]
+    points=[{'id':r['id'],'building_code':r['building_code'],'day':r['day'],'actual':float(actual),'prediction':float(pred),'residual':float(actual-pred),'forecast_station_code':r.get('forecast_station_code'),'forecast_published_at':r.get('forecast_published_at'),'forecast_revision':r.get('forecast_revision')} for r,actual,pred in zip(test,y,prediction)]
     return metrics,findings,points

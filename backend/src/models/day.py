@@ -1,9 +1,11 @@
-from sqlalchemy import String,ForeignKey,Double,UniqueConstraint
+from sqlalchemy import String,ForeignKey,Double,UniqueConstraint,Index
 from sqlalchemy.orm import Mapped,mapped_column
 from src.config.database import Base
 class BuildingDay(Base):
     __tablename__='building_days'
-    __table_args__=(UniqueConstraint('dataset_id','building_code','day'),)
+    # building_code is the second column of the unique key, so range refreshes
+    # per building need their own index.
+    __table_args__=(UniqueConstraint('dataset_id','building_code','day'),Index('ix_building_days_building','building_code','day'))
     id:Mapped[int]=mapped_column(primary_key=True)
     dataset_id:Mapped[int]=mapped_column(ForeignKey('building_datasets.id'))
     building_code:Mapped[str]=mapped_column(String(60))
